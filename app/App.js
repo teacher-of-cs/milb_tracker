@@ -1,6 +1,7 @@
 // CODE CREATED BY GEMINI
+// UPDATED WITH FIREBASE INTEGRATION
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   StyleSheet, 
   Text, 
@@ -9,8 +10,11 @@ import {
   TouchableOpacity, 
   ScrollView, 
   Modal, 
-  SafeAreaView 
+  SafeAreaView,
+  Alert 
 } from 'react-native';
+import '@react-native-firebase/app';
+import database from '@react-native-firebase/database';
 
 // Mock database simulating MiLB historical and current statistics
 const INITIAL_PLAYERS = [
@@ -53,18 +57,59 @@ export default function App() {
   const [players, setPlayers] = useState(INITIAL_PLAYERS);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [activeTab, setActiveTab] = useState('current'); // current, historical, logs
+  const [loading, setLoading] = useState(true);
   
   // Form input states
   const [playerName, setPlayerName] = useState('');
   const [playerTeam, setPlayerTeam] = useState('');
   const [playerPosition, setPlayerPosition] = useState('');
 
+  // Load players from Firebase on app start
+  useEffect(() => {
+    loadPlayersFromFirebase();
+  }, []);
+
+  const loadPlayersFromFirebase = () => {
+    setLoading(true);
+    try {
+      const unsubscribe = database()
+        .ref('players')
+        .on('value', (snapshot) => {
+          const data = snapshot.val();
+          if (data) {
+            const playerList = Object.entries(data).map(([key, value]) => ({
+              id: key,
+              ...value
+            }));
+            setPlayers(playerList);
+          } else {
+            // If no data in Firebase, use initial players
+            setPlayers(INITIAL_PLAYERS);
+          }
+          setLoading(false);
+        }, (error) => {
+          console.error('Error loading players from Firebase:', error);
+          setLoading(false);
+          // Fallback to initial players if Firebase fails
+          setPlayers(INITIAL_PLAYERS);
+        });
+
+      return () => unsubscribe();
+    } catch (error) {
+      console.error('Firebase connection error:', error);
+      setLoading(false);
+      setPlayers(INITIAL_PLAYERS);
+    }
+  };
+
   // Add a new player with starter mock data fields
-  const handleAddPlayer = () => {
-    if (!playerName.trim()) return;
+  const handleAddPlayer = async () => {
+    if (!playerName.trim()) {
+      Alert.alert('Error', 'Please enter a player name');
+      return;
+    }
     
     const newPlayer = {
-      id: Math.random().toString(),
       name: playerName,
       team: playerTeam || 'Unassigned (Rookie)',
       position: playerPosition || 'IF',
@@ -77,11 +122,53 @@ export default function App() {
       ]
     };
 
-    setPlayers([...players, newPlayer]);
-    setPlayerName('');
-    setPlayerTeam('');
-    setPlayerPosition('');
+    try {
+      // Save to Firebase
+      await database().ref('players').push(newPlayer);
+      
+      // Clear form
+      setPlayerName('');
+      setPlayerTeam('');
+      setPlayerPosition('');
+      
+      Alert.alert('Success', 'Player added successfully!');
+    } catch (error) {
+      console.error('Error saving player to Firebase:', error);
+      Alert.alert('Error', 'Failed to add player. Check your Firebase connection.');
+      
+      // Fallback: add locally if Firebase fails
+      const localPlayer = {
+        id: Math.random().toString(),
+        ...newPlayer
+      };
+      setPlayers([...players, localPlayer]);
+      setPlayerName('');
+      setPlayerTeam('');
+      setPlayerPosition('');
+    }
   };
+
+  // Delete player from Firebase
+  const handleDeletePlayer = async (playerId) => {
+    try {
+      await database().ref(`players/${playerId}`).remove();
+      Alert.alert('Success', 'Player removed successfully!');
+    } catch (error) {
+      console.error('Error deleting player:', error);
+      Alert.alert('Error', 'Failed to delete player.');
+    }
+  };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <Text style={styles.header}>⚾ MiLB Tracker Pro</Text>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <Text style={{ fontSize: 16, color: '#666' }}>Loading players...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -118,17 +205,37 @@ export default function App() {
       <Text style={styles.sectionTitle}>My Monitored Prospects ({players.length})</Text>
       <ScrollView style={styles.listContainer}>
         {players.map((player) => (
-          <TouchableOpacity 
-            key={player.id} 
-            style={styles.playerCard} 
-            onPress={() => { setSelectedPlayer(player); setActiveTab('current'); }}
-          >
-            <View>
-              <Text style={styles.playerName}>{player.name}</Text>
-              <Text style={styles.playerDetails}>{player.team} • {player.position}</Text>
-            </View>
-            <Text style={styles.viewLink}>View Stats ➔</Text>
-          </TouchableOpacity>
+          <View key={player.id} style={{ marginBottom: 8 }}>
+            <TouchableOpacity 
+              style={styles.playerCard} 
+              onPress={() => { setSelectedPlayer(player); setActiveTab('current'); }}
+            >
+              <View>
+                <Text style={styles.playerName}>{player.name}</Text>
+                <Text style={styles.playerDetails}>{player.team} • {player.position}</Text>
+              </View>
+              <Text style={styles.viewLink}>View Stats ➔</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.deleteButton}
+              onPress={() => {
+                Alert.alert(
+                  'Delete Player',
+                  `Are you sure you want to remove ${player.name}?`,
+                  [
+                    { text: 'Cancel', onPress: () => {}, style: 'cancel' },
+                    { 
+                      text: 'Delete', 
+                      onPress: () => handleDeletePlayer(player.id),
+                      style: 'destructive'
+                    }
+                  ]
+                );
+              }}
+            >
+              <Text style={{ color: '#ff3b30', fontSize: 12, fontWeight: '600' }}>🗑️ Remove</Text>
+            </TouchableOpacity>
+          </View>
         ))}
       </ScrollView>
 
@@ -220,10 +327,11 @@ const styles = StyleSheet.create({
   buttonText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
   sectionTitle: { fontSize: 16, fontWeight: '700', color: '#555', marginBottom: 8 },
   listContainer: { flex: 1 },
-  playerCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fff', padding: 16, borderRadius: 8, marginBottom: 8, borderLeftWidth: 4, borderLeftColor: '#0076ff' },
+  playerCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fff', padding: 16, borderRadius: 8, borderLeftWidth: 4, borderLeftColor: '#0076ff' },
   playerName: { fontSize: 17, fontWeight: 'bold', color: '#222' },
   playerDetails: { fontSize: 13, color: '#666', marginTop: 2 },
   viewLink: { fontSize: 13, color: '#0076ff', fontWeight: '600' },
+  deleteButton: { paddingHorizontal: 16, paddingVertical: 6, alignItems: 'flex-end' },
   modalContainer: { flex: 1, backgroundColor: '#fff' },
   modalHeaderView: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, backgroundColor: '#0f2042' },
   modalPlayerName: { fontSize: 22, fontWeight: 'bold', color: '#fff' },
